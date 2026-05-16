@@ -56,86 +56,87 @@ function destroyHls() {
 function setStatus(msg) { statusEl.textContent = msg; }
 function setTitle(t)    { titleEl.textContent  = t || 'SMIPTVPro'; }
 
-// Intercetta il caricamento media PRIMA che il framework tenti di riprodurlo
+// Intercettore del Messaggio LOAD
 manager.setMessageInterceptor(
   cast.framework.messages.MessageType.LOAD,
   request => {
+    if (!request || !request.media) return request;
+
     const media   = request.media;
     const url     = media.contentId || media.contentUrl || '';
     const mime    = (media.contentType || '').toLowerCase();
-    const title   = media.metadata?.title || url.split('/').pop() || 'Canale';
+    const title   = media.metadata?.title || url.split('/').pop() || 'Canale Live';
 
     setTitle(title);
-    setStatus('Caricamento...');
+    setStatus('Connessione allo stream...');
     spinner.style.display = 'block';
 
     destroyHls();
 
-    const isHls = mime.includes('mpegurl') || mime.includes('x-mpegurl') ||
-                  url.toLowerCase().includes('.m3u8');
+    const isHls = mime.includes('mpegurl') || mime.includes('x-mpegurl') || url.toLowerCase().includes('.m3u8');
+    const isTs  = mime.includes('mp2t') || url.toLowerCase().includes('.ts') || url.includes('output=ts');
     const isMp4 = mime.includes('mp4') || url.toLowerCase().includes('.mp4');
-    const isTs  = mime.includes('mp2t') || url.toLowerCase().endsWith('.ts');
 
-    if (isHls || isTs) {
-      // Usa hls.js per HLS e MPEG-TS
+    // CASO 1: È un vero flusso HLS (.m3u8) -> Usa hls.js
+    if (isHls) {
       if (Hls.isSupported()) {
         hlsInstance = new Hls({
           enableWorker: true,
-          lowLatencyMode: false,
-          backBufferLength: 0,
-          maxBufferLength: 30,
-          maxMaxBufferLength: 60,
-          xhrSetup: function(xhr) {
-            xhr.timeout = 15000;
-          }
+          lowLatencyMode: true,
+          backBufferLength: 0
         });
         hlsInstance.loadSource(url);
         hlsInstance.attachMedia(video);
         hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
-          spinner.style.display = 'none';
-          setStatus('In onda');
-          video.play().catch(e => setStatus('Errore play: ' + e.message));
+          video.play().catch(e => console.log("Play bloccato:", e));
         });
         hlsInstance.on(Hls.Events.ERROR, (event, data) => {
           if (data.fatal) {
-            setStatus('Errore stream: ' + data.type);
-            spinner.style.display = 'block';
             if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
               hlsInstance.startLoad();
             } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
               hlsInstance.recoverMediaError();
             } else {
               destroyHls();
+              setStatus('Errore fatale canale');
             }
           }
         });
-      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        // Safari / WebKit nativo
-        video.src = url;
-        video.play().then(() => { spinner.style.display='none'; setStatus('In onda'); })
-             .catch(e => setStatus('Errore: ' + e.message));
+        return null; // Gestito via hls.js
       }
-      // Impedisci al framework di gestire il media (lo gestiamo noi)
-      return null;
     }
 
-    if (isMp4) {
+    // CASO 2: È un flusso diretto MPEG-TS (.ts) o un MP4 standard
+    if (isTs || isMp4) {
+      destroyHls();
       video.src = url;
-      video.play().then(() => { spinner.style.display='none'; setStatus('In riproduzione'); })
-           .catch(e => setStatus('Errore: ' + e.message));
-      return null;
+      video.load();
+      video.play().catch(e => setStatus('Errore riproduzione diretta'));
+      return null; // Gestito inserendo la sorgente nel tag HTML5
     }
 
-    // Lascia tutto il resto al framework Cast nativo
-    spinner.style.display = 'none';
+    // Se non corrisponde a nessuno, lascia fare al CAF nativo (Fallback)
     return request;
   }
 );
 
-video.addEventListener('playing', () => { spinner.style.display='none'; setStatus('In onda'); });
-video.addEventListener('waiting', () => { spinner.style.display='block'; setStatus('Buffering...'); });
-video.addEventListener('error',   () => { spinner.style.display='none'; setStatus('Errore video'); });
+// Eventi del player HTML5 per gestire l'interfaccia grafica
+video.addEventListener('playing', () => { 
+  spinner.style.display = 'none'; 
+  setStatus('In onda'); 
+});
 
+video.addEventListener('waiting', () => { 
+  spinner.style.display = 'block'; 
+  setStatus('Buffering...'); 
+});
+
+video.addEventListener('error', () => { 
+  spinner.style.display = 'none'; 
+  setStatus('Errore di caricamento o CORS bloccato'); 
+});
+
+// Avvia il ricevitore
 context.start({ touchScreenOptimizedApp: false });
 </script>
 </body>
