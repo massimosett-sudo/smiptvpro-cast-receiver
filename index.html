@@ -4,9 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SMIPTVPro Custom Receiver</title>
-    
     <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
-    
     <style>
         html, body {
             width: 100%;
@@ -19,71 +17,23 @@
         cast-media-player {
             width: 100%;
             height: 100%;
-            --theme-hue: 0; /* Controlli rossi in stile IPTV */
+            --theme-hue: 0;
         }
     </style>
 </head>
 <body>
-
     <cast-media-player></cast-media-player>
-
 <script>
     const context = cast.framework.CastReceiverContext.getInstance();
     const manager = context.getPlayerManager();
 
-    // 1. OTTIMIZZAZIONE CORS: Forziamo il lettore a supportare le richieste cross-origin con credenziali.
-    // Molti server IPTV richiedono cookie o token di sessione per convalidare il flusso .ts.
     const playbackConfig = new cast.framework.PlaybackConfig();
-    playbackConfig.withCredentials = true; 
-    playbackConfig.manifestRequestHandler = requestInfo => {
-        requestInfo.withCredentials = true;
-    };
-    playbackConfig.segmentRequestHandler = requestInfo => {
-        requestInfo.withCredentials = true;
-    };
+    playbackConfig.autoResumeDuration = 5;
 
-    // Intercettiamo la richiesta di LOAD
     manager.setMessageInterceptor(
         cast.framework.messages.MessageType.LOAD,
         request => {
-            if (request.media && request.media.contentId) {
-                const url = request.media.contentId.toLowerCase();
-                
-                // Controllo flussi .ts (MPEG-TS)
-                if (url.includes('.ts') || request.media.contentType === 'video/mp2t') {
-                    
-                    // Forza il tipo MIME corretto per l'hardware Chromecast
-                    request.media.contentType = 'video/mp2t';
-                    
-                    // Definisce lo streaming come diretta LIVE (disabilita seekbar e ottimizza il buffer di rete)
-                    request.media.streamType = cast.framework.messages.StreamType.LIVE;
-                    
-                    // Specifica il formato del segmento rigido per impedire fallimenti di lettura
-                    request.media.hlsSegmentFormat = cast.framework.messages.HlsSegmentFormat.TS;
-                }
-            }
-            return request;
-        }
-    );
+            if (!request.media) return request;
 
-    // 2. PREVENZIONE RITARDI E BUFFERING: Riavvia automaticamente la riproduzione se il flusso si perde
-    manager.addEventListener(cast.framework.events.EventType.ERROR, event => {
-        console.error('Errore di riproduzione intercettato:', event);
-        
-        // Se il flusso cade per timeout o pacchetti corrotti (.ts instabili), forza il recupero
-        if (event.detailedErrorCode === cast.framework.events.DetailedErrorCode.MEDIA_UNKNOWN ||
-            event.detailedErrorCode === cast.framework.events.DetailedErrorCode.NETWORK) {
-            setTimeout(() => {
-                manager.play();
-            }, 1000);
-        }
-    });
-
-    // Avvia il contesto applicando la configurazione di riproduzione corretta
-    context.start({ 
-        touchScreenOptimizedApp: false,
-        playbackConfig: playbackConfig
-    });
-</script>
-</body>
-</html>
+            const url         = (request.media.contentId || request.media.contentUrl || '').toLowerCase();
+            const contentType = (request.media.contentT
