@@ -1,142 +1,76 @@
 <!DOCTYPE html>
-<html>
+<html lang="it">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SMIPTVPro Receiver</title>
-<style>
-* { margin:0; padding:0; box-sizing:border-box; }
-html, body { width:100%; height:100%; background:#000; overflow:hidden; }
-video { width:100%; height:100%; object-fit:contain; }
-#overlay {
-  position:fixed; top:0; left:0; width:100%; height:100%;
-  display:flex; flex-direction:column;
-  justify-content:flex-end; padding:40px;
-  background:linear-gradient(transparent 60%, rgba(0,0,0,0.8));
-  pointer-events:none;
-}
-#title { color:#fff; font-size:32px; font-family:sans-serif; font-weight:bold; text-shadow:2px 2px 4px #000; }
-#status { color:#aaa; font-size:20px; font-family:sans-serif; margin-top:8px; }
-#spinner {
-  position:fixed; top:50%; left:50%;
-  transform:translate(-50%,-50%);
-  width:60px; height:60px;
-  border:6px solid rgba(255,255,255,0.2);
-  border-top-color:#E50914;
-  border-radius:50%;
-  animation:spin 0.8s linear infinite;
-}
-@keyframes spin { to { transform:translate(-50%,-50%) rotate(360deg); } }
-</style>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SMIPTVPro Custom Receiver</title>
+    
+    <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+    
+    <style>
+        html, body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            background-color: #000000;
+            overflow: hidden;
+        }
+        /* Il tag cast-media-player occupa tutto lo schermo e gestisce 
+           nativamente player, scritte, buffering e grafiche */
+        cast-media-player {
+            width: 100%;
+            height: 100%;
+            --theme-hue: 0; /* Colore rosso per i controlli (stile Netflix/IPTV) */
+        }
+    </style>
 </head>
 <body>
-<video id="video" autoplay playsinline></video>
-<div id="overlay">
-  <div id="title">SMIPTVPro</div>
-  <div id="status">In attesa...</div>
-</div>
-<div id="spinner"></div>
 
-<script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/hls.js@latest/dist/hls.min.js"></script>
+    <cast-media-player></cast-media-player>
+
 <script>
-const context  = cast.framework.CastReceiverContext.getInstance();
-const manager  = context.getPlayerManager();
-const video    = document.getElementById('video');
-const titleEl  = document.getElementById('title');
-const statusEl = document.getElementById('status');
-const spinner  = document.getElementById('spinner');
+    const context = cast.framework.CastReceiverContext.getInstance();
+    const manager = context.getPlayerManager();
 
-let hlsInstance = null;
-
-function destroyHls() {
-  if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
-}
-
-function setStatus(msg) { statusEl.textContent = msg; }
-function setTitle(t)    { titleEl.textContent  = t || 'SMIPTVPro'; }
-
-// Intercetta il caricamento media PRIMA che il framework tenti di riprodurlo
-manager.setMessageInterceptor(
-  cast.framework.messages.MessageType.LOAD,
-  request => {
-    const media   = request.media;
-    const url     = media.contentId || media.contentUrl || '';
-    const mime    = (media.contentType || '').toLowerCase();
-    const title   = media.metadata?.title || url.split('/').pop() || 'Canale';
-
-    setTitle(title);
-    setStatus('Caricamento...');
-    spinner.style.display = 'block';
-
-    destroyHls();
-
-    const isHls = mime.includes('mpegurl') || mime.includes('x-mpegurl') ||
-                  url.toLowerCase().includes('.m3u8');
-    const isMp4 = mime.includes('mp4') || url.toLowerCase().includes('.mp4');
-    const isTs  = mime.includes('mp2t') || url.toLowerCase().endsWith('.ts');
-
-    if (isHls || isTs) {
-      // Usa hls.js per HLS e MPEG-TS
-      if (Hls.isSupported()) {
-        hlsInstance = new Hls({
-          enableWorker: true,
-          lowLatencyMode: false,
-          backBufferLength: 0,
-          maxBufferLength: 30,
-          maxMaxBufferLength: 60,
-          xhrSetup: function(xhr) {
-            xhr.timeout = 15000;
-          }
-        });
-        hlsInstance.loadSource(url);
-        hlsInstance.attachMedia(video);
-        hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
-          spinner.style.display = 'none';
-          setStatus('In onda');
-          video.play().catch(e => setStatus('Errore play: ' + e.message));
-        });
-        hlsInstance.on(Hls.Events.ERROR, (event, data) => {
-          if (data.fatal) {
-            setStatus('Errore stream: ' + data.type);
-            spinner.style.display = 'block';
-            if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-              hlsInstance.startLoad();
-            } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-              hlsInstance.recoverMediaError();
-            } else {
-              destroyHls();
+    // Intercettiamo la richiesta di LOAD prima che il Chromecast provi a riprodurla
+    manager.setMessageInterceptor(
+        cast.framework.messages.MessageType.LOAD,
+        request => {
+            if (request.media && request.media.contentId) {
+                const url = request.media.contentId.toLowerCase();
+                
+                // Forza la compatibilità se l'URL è un file .ts o se ha il mime-type dei flussi MPEG-TS
+                if (url.includes('.ts') || request.media.contentType === 'video/mp2t') {
+                    
+                    // 1. Indica a Chromecast di usare il demuxer hardware interno per i flussi MPEG-TS
+                    request.media.contentType = 'video/mp2t';
+                    
+                    // 2. Comunica che si tratta di una diretta (LIVE). Fondamentale per l'IPTV
+                    request.media.streamType = cast.framework.messages.StreamType.LIVE;
+                    
+                    // 3. Disabilita il cambio di traccia audio/sottotitoli automatico che spesso corrompe i flussi live .ts
+                    request.media.hlsSegmentFormat = cast.framework.messages.HlsSegmentFormat.TS;
+                }
             }
-          }
-        });
-      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        // Safari / WebKit nativo
-        video.src = url;
-        video.play().then(() => { spinner.style.display='none'; setStatus('In onda'); })
-             .catch(e => setStatus('Errore: ' + e.message));
-      }
-      // Impedisci al framework di gestire il media (lo gestiamo noi)
-      return null;
-    }
+            
+            // Ritorna la richiesta modificata al sistema. 
+            // IMPORTANTE: NON ritornare mai null, altrimenti il cast si scollega!
+            return request;
+        }
+    );
 
-    if (isMp4) {
-      video.src = url;
-      video.play().then(() => { spinner.style.display='none'; setStatus('In riproduzione'); })
-           .catch(e => setStatus('Errore: ' + e.message));
-      return null;
-    }
+    // Gestione degli errori per evitare che il player si blocchi a schermo nero in caso di micro-interruzioni
+    manager.addEventListener(cast.framework.events.EventType.ERROR, event => {
+        console.error('Errore di riproduzione intercettato:', event);
+        // Forza il superamento dell'errore se il flusso live perde un pacchetto
+        if (event.detailedErrorCode === cast.framework.events.DetailedErrorCode.MEDIA_UNKNOWN) {
+            manager.play();
+        }
+    });
 
-    // Lascia tutto il resto al framework Cast nativo
-    spinner.style.display = 'none';
-    return request;
-  }
-);
-
-video.addEventListener('playing', () => { spinner.style.display='none'; setStatus('In onda'); });
-video.addEventListener('waiting', () => { spinner.style.display='block'; setStatus('Buffering...'); });
-video.addEventListener('error',   () => { spinner.style.display='none'; setStatus('Errore video'); });
-
-context.start({ touchScreenOptimizedApp: false });
+    // Avvia il ricevitore ottimizzato per la TV (senza interfacce touch forzate)
+    context.start({ touchScreenOptimizedApp: false });
 </script>
 </body>
 </html>
