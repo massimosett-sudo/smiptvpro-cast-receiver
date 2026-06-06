@@ -16,12 +16,10 @@
             background-color: #000000;
             overflow: hidden;
         }
-        /* Il tag cast-media-player occupa tutto lo schermo e gestisce 
-           nativamente player, scritte, buffering e grafiche */
         cast-media-player {
             width: 100%;
             height: 100%;
-            --theme-hue: 0; /* Colore rosso per i controlli (stile Netflix/IPTV) */
+            --theme-hue: 0; /* Controlli rossi in stile IPTV */
         }
     </style>
 </head>
@@ -33,44 +31,59 @@
     const context = cast.framework.CastReceiverContext.getInstance();
     const manager = context.getPlayerManager();
 
-    // Intercettiamo la richiesta di LOAD prima che il Chromecast provi a riprodurla
+    // 1. OTTIMIZZAZIONE CORS: Forziamo il lettore a supportare le richieste cross-origin con credenziali.
+    // Molti server IPTV richiedono cookie o token di sessione per convalidare il flusso .ts.
+    const playbackConfig = new cast.framework.PlaybackConfig();
+    playbackConfig.withCredentials = true; 
+    playbackConfig.manifestRequestHandler = requestInfo => {
+        requestInfo.withCredentials = true;
+    };
+    playbackConfig.segmentRequestHandler = requestInfo => {
+        requestInfo.withCredentials = true;
+    };
+
+    // Intercettiamo la richiesta di LOAD
     manager.setMessageInterceptor(
         cast.framework.messages.MessageType.LOAD,
         request => {
             if (request.media && request.media.contentId) {
                 const url = request.media.contentId.toLowerCase();
                 
-                // Forza la compatibilità se l'URL è un file .ts o se ha il mime-type dei flussi MPEG-TS
+                // Controllo flussi .ts (MPEG-TS)
                 if (url.includes('.ts') || request.media.contentType === 'video/mp2t') {
                     
-                    // 1. Indica a Chromecast di usare il demuxer hardware interno per i flussi MPEG-TS
+                    // Forza il tipo MIME corretto per l'hardware Chromecast
                     request.media.contentType = 'video/mp2t';
                     
-                    // 2. Comunica che si tratta di una diretta (LIVE). Fondamentale per l'IPTV
+                    // Definisce lo streaming come diretta LIVE (disabilita seekbar e ottimizza il buffer di rete)
                     request.media.streamType = cast.framework.messages.StreamType.LIVE;
                     
-                    // 3. Disabilita il cambio di traccia audio/sottotitoli automatico che spesso corrompe i flussi live .ts
+                    // Specifica il formato del segmento rigido per impedire fallimenti di lettura
                     request.media.hlsSegmentFormat = cast.framework.messages.HlsSegmentFormat.TS;
                 }
             }
-            
-            // Ritorna la richiesta modificata al sistema. 
-            // IMPORTANTE: NON ritornare mai null, altrimenti il cast si scollega!
             return request;
         }
     );
 
-    // Gestione degli errori per evitare che il player si blocchi a schermo nero in caso di micro-interruzioni
+    // 2. PREVENZIONE RITARDI E BUFFERING: Riavvia automaticamente la riproduzione se il flusso si perde
     manager.addEventListener(cast.framework.events.EventType.ERROR, event => {
         console.error('Errore di riproduzione intercettato:', event);
-        // Forza il superamento dell'errore se il flusso live perde un pacchetto
-        if (event.detailedErrorCode === cast.framework.events.DetailedErrorCode.MEDIA_UNKNOWN) {
-            manager.play();
+        
+        // Se il flusso cade per timeout o pacchetti corrotti (.ts instabili), forza il recupero
+        if (event.detailedErrorCode === cast.framework.events.DetailedErrorCode.MEDIA_UNKNOWN ||
+            event.detailedErrorCode === cast.framework.events.DetailedErrorCode.NETWORK) {
+            setTimeout(() => {
+                manager.play();
+            }, 1000);
         }
     });
 
-    // Avvia il ricevitore ottimizzato per la TV (senza interfacce touch forzate)
-    context.start({ touchScreenOptimizedApp: false });
+    // Avvia il contesto applicando la configurazione di riproduzione corretta
+    context.start({ 
+        touchScreenOptimizedApp: false,
+        playbackConfig: playbackConfig
+    });
 </script>
 </body>
 </html>
