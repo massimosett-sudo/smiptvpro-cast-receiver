@@ -6,19 +6,8 @@
     <title>SMIPTVPro Custom Receiver</title>
     <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
     <style>
-        html, body {
-            width: 100%;
-            height: 100%;
-            margin: 0;
-            padding: 0;
-            background-color: #000000;
-            overflow: hidden;
-        }
-        cast-media-player {
-            width: 100%;
-            height: 100%;
-            --theme-hue: 0;
-        }
+        html, body { width: 100%; height: 100%; margin: 0; padding: 0; background-color: #000000; overflow: hidden; }
+        cast-media-player { width: 100%; height: 100%; --theme-hue: 0; }
     </style>
 </head>
 <body>
@@ -27,8 +16,12 @@
     const context = cast.framework.CastReceiverContext.getInstance();
     const manager = context.getPlayerManager();
 
+    // CONFIGURAZIONE PLAYBACK (Unione delle due versioni: Auto-resume + Supporto Token/CORS IPTV)
     const playbackConfig = new cast.framework.PlaybackConfig();
     playbackConfig.autoResumeDuration = 5;
+    playbackConfig.withCredentials = true; 
+    playbackConfig.manifestRequestHandler = requestInfo => { requestInfo.withCredentials = true; };
+    playbackConfig.segmentRequestHandler = requestInfo => { requestInfo.withCredentials = true; };
 
     manager.setMessageInterceptor(
         cast.framework.messages.MessageType.LOAD,
@@ -36,4 +29,58 @@
             if (!request.media) return request;
 
             const url         = (request.media.contentId || request.media.contentUrl || '').toLowerCase();
-            const contentType = (request.media.contentT
+            const contentType = (request.media.contentType || '').toLowerCase();
+
+            const isTs = url.includes('.ts')
+                      || contentType === 'video/mp2t'
+                      || url.includes('/ts/')
+                      || url.match(/\/(live|stream)\//);
+
+            if (isTs) {
+                request.media.contentType      = 'video/mp2t';
+                request.media.streamType       = cast.framework.messages.StreamType.LIVE;
+                request.media.hlsSegmentFormat = cast.framework.messages.HlsSegmentFormat.TS;
+            }
+
+            const isHls = url.includes('.m3u8') || contentType === 'application/x-mpegurl';
+            if (isHls) {
+                request.media.contentType = 'application/x-mpegurl';
+                request.media.streamType  = cast.framework.messages.StreamType.LIVE;
+            }
+
+            return request;
+        }
+    );
+
+    // GESTIONE ERRORI AVANZATA (Previene i blocchi della diretta ricaricando il flusso)
+    manager.addEventListener(cast.framework.events.EventType.ERROR, event => {
+        console.error('Errore ricevitore:', event.detailedErrorCode, event);
+
+        const recoverableCodes = [
+            cast.framework.events.DetailedErrorCode.MEDIA_UNKNOWN,
+            cast.framework.events.DetailedErrorCode.NETWORK,
+            cast.framework.events.DetailedErrorCode.SEGMENT_NETWORK,
+            cast.framework.events.DetailedErrorCode.MANIFEST_NETWORK,
+        ];
+
+        if (recoverableCodes.includes(event.detailedErrorCode)) {
+            setTimeout(() => {
+                const mediaInfo = manager.getMediaInformation();
+                if (mediaInfo) {
+                    const loadReq = new cast.framework.messages.LoadRequestData();
+                    loadReq.media       = mediaInfo;
+                    loadReq.autoplay    = true;
+                    loadReq.currentTime = 0;
+                    manager.load(loadReq);
+                }
+            }, 2000);
+        }
+    });
+
+    context.start({
+        touchScreenOptimizedApp: false,
+        playbackConfig: playbackConfig
+    });
+</script>
+</body>
+</html>
