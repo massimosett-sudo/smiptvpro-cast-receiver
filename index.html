@@ -16,13 +16,29 @@
     const context = cast.framework.CastReceiverContext.getInstance();
     const manager = context.getPlayerManager();
 
-    // CONFIGURAZIONE PLAYBACK (Unione delle due versioni: Auto-resume + Supporto Token/CORS IPTV)
+    // 1. CONFIGURAZIONE AVANZATA DEL LETTORE PER FLUSSI IPTV INSTABILI
     const playbackConfig = new cast.framework.PlaybackConfig();
     playbackConfig.autoResumeDuration = 5;
     playbackConfig.withCredentials = true; 
     playbackConfig.manifestRequestHandler = requestInfo => { requestInfo.withCredentials = true; };
     playbackConfig.segmentRequestHandler = requestInfo => { requestInfo.withCredentials = true; };
 
+    // TWEAKS FONDAMENTALI PER I FILE .TS: Forza il lettore interno (Shaka) a tollerare disallineamenti audio/video
+    playbackConfig.shakaConfig = {
+        streaming: {
+            jumpLargeGaps: true,          // Salta i vuoti temporali nel flusso senza bloccare il player
+            ignoreTextStreamFailures: true // Ignora errori nei sottotitoli che spesso fanno crashare i canali TS
+        },
+        manifest: {
+            retryParameters: {
+                maxAttempts: 4,
+                baseDelay: 1000,
+                backoffFactor: 2
+            }
+        }
+    };
+
+    // 2. INTERCETTAZIONE E CORREZIONE DEL CARICAMENTO
     manager.setMessageInterceptor(
         cast.framework.messages.MessageType.LOAD,
         request => {
@@ -31,6 +47,7 @@
             const url         = (request.media.contentId || request.media.contentUrl || '').toLowerCase();
             const contentType = (request.media.contentType || '').toLowerCase();
 
+            // Identificazione estesa dei canali Live in formato MPEG-TS
             const isTs = url.includes('.ts')
                       || contentType === 'video/mp2t'
                       || url.includes('/ts/')
@@ -38,6 +55,7 @@
 
             if (isTs) {
                 request.media.contentType      = 'video/mp2t';
+                // Comunichiamo al Chromecast di trattarlo come un flusso LIVE continuo, riducendo la rigidità del buffer
                 request.media.streamType       = cast.framework.messages.StreamType.LIVE;
                 request.media.hlsSegmentFormat = cast.framework.messages.HlsSegmentFormat.TS;
             }
@@ -52,18 +70,21 @@
         }
     );
 
-    // GESTIONE ERRORI AVANZATA (Previene i blocchi della diretta ricaricando il flusso)
+    // 3. RECUPERO AGGRESSIVO IN CASO DI ERRORE DI RETE O PACCHETTI CORROTTI
     manager.addEventListener(cast.framework.events.EventType.ERROR, event => {
-        console.error('Errore ricevitore:', event.detailedErrorCode, event);
+        console.error('Errore rilevato sul ricevitore:', event.detailedErrorCode, event);
 
         const recoverableCodes = [
             cast.framework.events.DetailedErrorCode.MEDIA_UNKNOWN,
             cast.framework.events.DetailedErrorCode.NETWORK,
             cast.framework.events.DetailedErrorCode.SEGMENT_NETWORK,
             cast.framework.events.DetailedErrorCode.MANIFEST_NETWORK,
+            cast.framework.events.DetailedErrorCode.HLS_NETWORK_MASTER_PLAYLIST,
+            cast.framework.events.DetailedErrorCode.DECODE
         ];
 
         if (recoverableCodes.includes(event.detailedErrorCode)) {
+            console.log('Tentativo di ricaricamento del flusso IPTV...');
             setTimeout(() => {
                 const mediaInfo = manager.getMediaInformation();
                 if (mediaInfo) {
@@ -73,7 +94,7 @@
                     loadReq.currentTime = 0;
                     manager.load(loadReq);
                 }
-            }, 2000);
+            }, 1500); // Ridotto a 1.5 secondi per un riavvio più rapido
         }
     });
 
